@@ -155,6 +155,62 @@ $env:XHS_DATA_DIR="./data"          # Windows PowerShell
 
 > 注意：如果你两条都不设，数据会落到 WorkBuddy 技能版的默认位置 `~/.workbuddy/xhs-monitor-data` —— 那是给技能专用的，普通用户不需要知道，所以**请务必显式指定一个目录**。
 
+## 监控清单：我监控谁
+
+采集之前，得先告诉工具监控哪些商品。这份清单就是数据目录下的 **`products.csv`**，六列：
+
+```csv
+id,title,url,shop,price,note
+6608c8b0000000001201b3d5,冬季加绒卫衣,https://www.xiaohongshu.com/goods-detail/6608c8b0000000001201b3d5,暖冬服饰,89.0,看能不能做同款
+6608c8b0000000001201b3d6,便携折叠水杯,https://www.xiaohongshu.com/goods-detail/6608c8b0000000001201b3d6,出行小物,29.9,
+6608c8b0000000001201b3d7,儿童护眼台灯,https://www.xiaohongshu.com/goods-detail/6608c8b0000000001201b3d7,护眼家居,159.0,客单价高 重点看
+```
+
+> 上面这三行的链接是**编的**（点开是 404），只用来示范格式。仓库里 `examples/products_sample.csv` 就是这份，可以直接复制过去改成自己的。
+
+| 列 | 必须 | 是什么 | 说明 |
+|---|---|---|---|
+| `id` | 是 | 商品 ID | 一般从链接里自动取。**它是一行的主键**——改了它，工具会当成另一个商品 |
+| `title` | 否 | 商品名 | 只给你自己看，不参与计算 |
+| `url` | 是 | 商品完整链接 | **采集靠它**，格式不对就采不到（见下） |
+| `shop` | 否 | 店铺名 | 只在看板上分组显示 |
+| `price` | 是 | 客单价 | **算商品价值要用**，填不准价值就不可信 |
+| `note` | 否 | 备注 | 随便写 |
+
+### 三条把商品放进清单的路
+
+| 方式 | 怎么做 | 适合 |
+|---|---|---|
+| 单条加 | `python monitor.py add --url "<链接>" --title "<名>" --price <单价>` | 偶尔加一两个 |
+| **批量编辑** | 用 Excel / 表格软件直接打开 `products.csv` 改 | 一次十几个以上，**推荐** |
+| 整个替换 | 拿 `examples/products_sample.csv` 当模板改成自己的，覆盖掉 `products.csv` | 第一次上手 |
+
+**`products.csv` 是唯一的事实来源**：`init` / `add` / `list` / `fetch` / `backfill` / `report` 每次跑都会重新读一遍。改名、改客单价、删掉某一行，**下次跑立刻生效，不用执行任何「刷新」**。
+
+### 链接从哪来，以及短链的坑
+
+`add` 和 `url` 列只认两种写法：**完整商品链接**（地址里含 `goods-detail/`）或**纯商品 ID**（24 位左右字母数字）。
+
+**小红书 App 里「分享 → 复制链接」拿到的是短链**，长这样：
+
+```
+https://xhslink.com/a/xxxxxxx          ← 这种不行，里面没有商品 ID
+```
+
+短链取不出 ID，工具会明确报错。处理办法：**用浏览器打开这个短链**，跳转之后地址栏会变成真实链接，复制它：
+
+```
+https://www.xiaohongshu.com/goods-detail/6608c8b0000000001201b3d5    ← 这个才行
+```
+
+或者直接从网页版进商品页，地址栏复制。
+
+### 换成自己的清单后，`backfill` 就不灵了
+
+自带的 12 个示例商品只为「不看真实数据也能把逻辑跑通」而存在。你一换成自己的清单，`backfill` 会提示「没有对应的模拟数据」——**这是正常的**，说明该用 `fetch` 采真实数据了。
+
+填完清单先跑一次 `list` 核对，确认 ID 和客单价都对，再开始采集。
+
 ## 三个指标，口径要记牢
 
 | 指标 | 公式 | 怎么读 |
@@ -216,7 +272,7 @@ playwright install chromium
 # 用你自己的浏览器登录一次，把登录态存下来
 playwright codegen --save-storage=<数据目录>/storage_state.json https://www.xiaohongshu.com
 
-# 换成你要监控的商品
+# 换成你要监控的商品（清单怎么填、链接从哪复制，见上面「监控清单：我监控谁」）
 python monitor.py add --url "<商品链接>" --title "<标题>" --price <客单价>
 python monitor.py fetch --dir ./data
 python monitor.py report --dir ./data
@@ -280,8 +336,10 @@ python monitor.py verify --dir ./data
 ```
 xhs-monitor/
 ├── monitor.py          主脚本：init / add / list / fetch / backfill / report / verify
+├── examples/
+│   └── products_sample.csv   监控清单模板，照着改成自己的
 └── data/               数据目录（你自己用 --dir 或 XHS_DATA_DIR 指定）
-    ├── products.csv    监控清单（换成你自己的）
+    ├── products.csv    监控清单（唯一事实来源，换成你自己的）
     ├── monitor.db      SQLite 快照库
     └── out/            report.html 看板 + report.md 日报
 ```
