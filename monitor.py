@@ -212,11 +212,13 @@ def cmd_list(args):
         print("监控池是空的。用 add 加商品，或先跑 init。")
         return
     print(f"监控池：{len(rows)} 个　（数据目录 {DATA_DIR}）\n")
-    print(wpad("ID", 10) + wpad("商品", 24) + wrpad("客单价", 10) + wpad("店铺", 16) + "快照数")
+    # ID 列宽自适应：示例 ID 只有 3 位，真实商品 ID 有 24 位，写死会把整行挤歪
+    idw = max([10] + [_w(r["id"]) for r in rows]) + 2
+    print(wpad("ID", idw) + wpad("商品", 24) + wrpad("客单价", 10) + "  " + wpad("店铺", 16) + "快照数")
     for r in rows:
         n = c.execute("SELECT COUNT(*) FROM snapshots WHERE product_id=?", (r["id"],)).fetchone()[0]
-        print(wpad(r["id"], 10) + wpad((r["title"] or "")[:20], 24)
-              + wrpad(f"{r['price']:.2f}", 10) + wpad((r["shop"] or "")[:12], 16) + str(n))
+        print(wpad(r["id"], idw) + wpad((r["title"] or "")[:20], 24)
+              + wrpad(f"{r['price']:.2f}", 10) + "  " + wpad((r["shop"] or "")[:12], 16) + str(n))
 
 
 # ---------------------------------------------------------------- 采集层
@@ -319,6 +321,7 @@ def load_products(c):
 def cmd_fetch(args):
     c = conn()
     ensure_csv()
+    sync_products(c)   # CSV 是唯一事实来源：手工编辑过的清单在这里才真正生效
     products = load_products(c)
     ts = args.at or now_ts()
     ok = fail = 0
@@ -343,6 +346,7 @@ def cmd_fetch(args):
 def cmd_backfill(args):
     c = conn()
     ensure_csv()
+    sync_products(c)   # 同上：编辑过 products.csv 后，回填前必须重新同步
     products = load_products(c)
     start = datetime.strptime(args.start, "%Y-%m-%d")
     missing = [p["id"] for p in products if p["id"] not in MOCK_PARAMS]
@@ -646,6 +650,7 @@ def build_md(items, mid, end_day, split="p75"):
 def cmd_report(args):
     c = conn()
     ensure_csv()
+    sync_products(c)   # 改过清单（改名、改客单价、删商品）后，看板立刻跟着变
     products = load_products(c)
     end_day = args.day or today_str()
     # 没指定日期时，自动落到「最近一条有效快照」那天。
