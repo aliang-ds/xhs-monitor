@@ -2,7 +2,7 @@
 
 每小时把商品的累计销量抄一次，存进本地数据库，用相邻快照相减得到增量，算出**今日销量、爆品值、商品价值**，按四象限排出优先级。
 
-配公众号:阿亮的修身炉，《把选品做成一套监控工具》那篇文章：文章讲为什么，这里讲怎么跑。
+配公众号「阿亮的修身炉」《把选品做成一套监控工具》那篇文章：文章讲为什么，这里讲怎么跑。
 
 ---
 
@@ -78,15 +78,23 @@
 
 ## 30 秒先看效果
 
-不用登录、不用装任何东西，先灌八天模拟数据把逻辑跑通：
+**只要 Python 3.7 以上**，不用装任何第三方库。命令里 `python` 跑不通的话，Windows 试试 `py`，macOS 试试 `python3`。
+
+不用登录、不用配置，先把仓库拿下来，灌一段历史数据把逻辑跑通：
 
 ```bash
+git clone https://github.com/aliang-ds/xhs-monitor.git    # 不想用 git，就点仓库页的 Code → Download ZIP
+cd xhs-monitor
+
 python monitor.py init --dir ./data
-python monitor.py backfill 8 --start 2026-09-25 --dir ./data    # 灌 8 天模拟数据
-python monitor.py report --day 2026-10-02 --dir ./data          # 生成看板
+python monitor.py backfill 8 --dir ./data    # 灌最近 8 天的模拟数据
+python monitor.py report --dir ./data        # 生成看板
 ```
 
-打开 `data/out/report.html`：
+> `backfill` 只对**自带的 12 个示例商品**有效。你一旦换成自己的清单，它就跑不出数据了 —— 那时改用 `fetch` 采真实数据。
+> 每条命令都带 `--dir` 有点烦，可以先设一次环境变量省掉它，见下面「数据目录」。
+
+打开 `data/out/report.html`，终端里是这样（**示例商品 + 模拟数据**的输出，你跑出来的应该跟它逐位一致）：
 
 ```
 商品                今日    累计    爆品值   商品价值  象限  证据
@@ -110,11 +118,25 @@ AI提示词合集          174    3607     20.7     411.3   ①    中
 | `list` | 列出监控池 |
 | `fetch` | 采集一次（真实模式，需登录态） |
 | `fetch --mock` | 采集一次（模拟模式） |
-| `backfill <天数> --start <日期> --mock` | 灌模拟历史，用来先跑通逻辑 |
-| `report [--day YYYY-MM-DD] [--split p75\|median\|value:200]` | 出看板 + 日报 |
+| `backfill <天数> [--start <日期>]` | 灌模拟历史，**只对自带的示例商品有效**，用来先跑通逻辑 |
+| `report [--day YYYY-MM-DD] [--split p75\|median\|value:200]` | 出看板 + 日报。不写 `--day` 就自动用**最近有数据的那天** |
 | `verify` | 自检 |
 
-数据目录默认 `~/.workbuddy/xhs-monitor-data`，用 `--dir` 或环境变量 `XHS_DATA_DIR` 改。**数据目录与脚本目录分离**，重装不会丢数据。
+### 数据目录
+
+每个命令都能用 `--dir` 指定数据放哪。嫌每条都敲麻烦，就先设一次环境变量：
+
+```bash
+export XHS_DATA_DIR=./data          # macOS / Linux
+set XHS_DATA_DIR=./data             # Windows cmd
+$env:XHS_DATA_DIR="./data"          # Windows PowerShell
+```
+
+设好之后，所有命令都能把 `--dir` 省掉。
+
+**建议把数据目录和脚本目录分开**，这样升级脚本不会把监控数据一起带走。
+
+> 注意：如果你两条都不设，数据会落到 WorkBuddy 技能版的默认位置 `~/.workbuddy/xhs-monitor-data` —— 那是给技能专用的，普通用户不需要知道，所以**请务必显式指定一个目录**。
 
 ## 三个指标，口径要记牢
 
@@ -136,8 +158,9 @@ AI提示词合集          174    3607     20.7     411.3   ①    中
 > 四类不是永久身份：一个商品今天在①，七天后可能因为销量衰退掉进③。
 
 > 商品价值是**重尾分布**，头尾常差三个数量级。
-> 实测这一池子：最大 1159，最小 0.8，中位数只有 7.0。
+> 在自带的示例池（模拟数据）里：最大 1159，最小 0.8，中位数只有 7.0。
 > 用中位数切会把日销十几单的小品也划进「高」区，所以默认用 p75，想换就 `--split median` 或 `--split value:200`。
+> 换成你自己的池子后，建议重新核一次这几个数——分布变了，p75 未必还是最合适的分界。
 
 ---
 
@@ -206,13 +229,15 @@ python monitor.py verify --dir ./data
 
 检查三件事：失败有没有被记成 0、中间采不到时日销量还算不算得对、累计销量有没有倒退。
 
-实测结果：失败 7 条 / 被记成 0 的 0 条；某个商品在中间断掉 3 个小时的那天，日销 226，跟相邻两天的 216、266 吻合（说明 NULL 没污染计算）；累计销量倒退 0 次。
+示例池（模拟数据）的自检结果：失败 7 条 / 被记成 0 的 0 条；某个商品在中间断掉 3 个小时的那天，日销 226，跟相邻两天的 216、266 吻合（说明 NULL 没污染计算）；累计销量倒退 0 次。
+
+> 那 7 条失败是**示例数据故意注入的**——就是留给你跑 `verify` 验证用的。你换成真实数据后跑出来的数字会不一样，重点看三条结论的**方向**：失败数不为 0 但记成 0 的是 0、断采那天的日销跟相邻天持平、倒退次数接近 0。
 
 ---
 
 ## 和 GitHub 上其他项目的区别
 
-做之前把 GitHub 翻了一遍（2026-10-03）：
+做之前把 GitHub 翻了一遍（2026-10-03）。★ 是当时查到的数字，之后会变，所以判断依据看后两列：
 
 | 项目 | 平台 | ★ | 存时间序列 | 算指标 |
 |---|---|---|:-:|:-:|
@@ -232,14 +257,14 @@ python monitor.py verify --dir ./data
 ```
 xhs-monitor/
 ├── monitor.py          主脚本：init / add / list / fetch / backfill / report / verify
-└── data/               数据目录（默认 ~/.workbuddy/xhs-monitor-data，可用 --dir 改）
+└── data/               数据目录（你自己用 --dir 或 XHS_DATA_DIR 指定）
     ├── products.csv    监控清单（换成你自己的）
     ├── monitor.db      SQLite 快照库
     └── out/            report.html 看板 + report.md 日报
 ```
 
-> 也有一个 WorkBuddy 技能版（`~/.workbuddy/skills/xhs-sales-monitor/`），
-> 在对话框里直接说「把这个商品加进监控池」「出今天的选品日报」就能用，不用记命令。
+> 另注：作者还做了一个同名的 WorkBuddy 技能版，装在 `~/.workbuddy/skills/xhs-sales-monitor/`，
+> 在对话框里直接说「把这个商品加进监控池」「出今天的选品日报」就能用。**跟本脚本没关系，你不需要装 WorkBuddy 也能跑这里的一切。**
 
 ---
 
