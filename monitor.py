@@ -9,16 +9,23 @@
   python monitor.py list                       列出当前监控池
   python monitor.py fetch                      采集一次（真实模式，需要登录态）
   python monitor.py fetch --mock               采集一次（模拟模式）
-  python monitor.py backfill 8 --start 2026-09-25 --mock    灌历史数据，先跑通逻辑
-  python monitor.py report [--day 2026-10-02] [--split p75|median|value:200]
+  python monitor.py backfill 8 [--start YYYY-MM-DD]   灌模拟历史，先把逻辑跑通（只对自带的示例商品有效）
+  python monitor.py report [--day YYYY-MM-DD] [--split p75|median|value:200]
   python monitor.py verify                     自检
 
-数据目录默认 ~/.workbuddy/xhs-monitor-data，可用 --dir 或环境变量 XHS_DATA_DIR 改。
-数据目录与脚本目录分离，重装或升级脚本都不会丢监控数据。
+数据目录：每个子命令都支持 --dir 指定，也可以设环境变量 XHS_DATA_DIR 省得每次敲。
+建议给自己项目指定一个固定目录（如 ./data），数据跟脚本分开放，升级脚本不会丢。
 
-每个子命令都支持 --dir。示例：
   python monitor.py init --dir ./data
-  python monitor.py report --day 2026-10-02 --dir ./data
+  python monitor.py report --dir ./data
+
+或先设一次环境变量，之后命令都能省掉 --dir：
+  export XHS_DATA_DIR=./data          # macOS / Linux
+  set XHS_DATA_DIR=./data             # Windows cmd
+  $env:XHS_DATA_DIR="./data"          # Windows PowerShell
+
+（WorkBuddy 技能版默认放在 ~/.workbuddy/xhs-monitor-data，那是技能专用位置，
+跟这里的命令行用法无关，你不需要装 WorkBuddy 也能用本脚本。）
 
 铁律：采不到记 NULL，绝不记 0。
 """
@@ -338,10 +345,14 @@ def cmd_backfill(args):
     ensure_csv()
     products = load_products(c)
     start = datetime.strptime(args.start, "%Y-%m-%d")
-    n = 0
+    missing = [p["id"] for p in products if p["id"] not in MOCK_PARAMS]
+
+    n = ok = fail = fail_missing = 0
+    # 只灌到昨天为止：今天的数据应该由真实采集产生，回填不该替它编。
+    # 这样 report 不带 --day 时自动选到的一定是完整的一天，而不是半天数据。
     for d in range(args.days):
         day = start + timedelta(days=d)
-        if day.date() > datetime.now().date():
+        if day.date() >= datetime.now().date():
             break
         for h in range(24):
             ts = day.strftime("%Y-%m-%d") + f" {h:02d}:00:00"
@@ -351,8 +362,27 @@ def cmd_backfill(args):
                 data, status, note = mock_value(p["id"], d, h)
                 record(c, p, data, status, note, ts)
                 n += 1
+                if status == "ok":
+                    ok += 1
+                else:
+                    fail += 1
+                    if p["id"] not in MOCK_PARAMS:
+                        fail_missing += 1
     c.commit()
-    print(f"已回填 {n} 条快照（模拟数据）→ 现在跑 report 看看板")
+
+    print(f"已回填 {n} 条快照：成功 {ok}，失败 {fail}（模拟数据）")
+    if ok == 0:
+        print("一条也没成功。模拟数据只为自带的 12 个示例商品准备，")
+        print("换成你自己的清单之后 backfill 就跑不出数据了，请改用 fetch 采真实数据。")
+        return
+    # 两种失败性质完全不同，得分开说，别混为一谈
+    if fail_missing:
+        print(f"注意：其中 {fail_missing} 条失败是因为这些商品没有对应的模拟数据 —— "
+              f"{'、'.join(missing)}")
+        print("      模拟数据只对自带的 12 个示例商品有效，你自己的商品请改用 fetch。")
+    injected = fail - fail_missing
+    if injected:
+        print(f"另有 {injected} 条失败是示例数据故意注入的，方便你跑 verify 验证。")
 
 
 # ---------------------------------------------------------------- 计算层
@@ -618,15 +648,26 @@ def cmd_report(args):
     ensure_csv()
     products = load_products(c)
     end_day = args.day or today_str()
+    # 没指定日期时，自动落到「最近一条有效快照」那天。
+    # 否则新手灌完历史数据后裸跑 report，会看到一整屏「—」，以为工具坏了。
+    auto = False
+    if not args.day:
+        latest = c.execute("SELECT MAX(day) FROM snapshots WHERE status='ok'").fetchone()[0]
+        if latest and latest != end_day:
+            end_day, auto = latest, True
+
     items = [x for x in (compute(c, p, end_day) for p in products) if x]
     if not items:
-        print("还没有有效快照。先跑 fetch，或 backfill 8 --start <日期> --mock 灌模拟数据。")
+        print("还没有有效快照。先跑 fetch，或 backfill 8 灌模拟数据跑通逻辑。")
         return
     mid = classify(items, args.split)
     h = build_html(items, mid, end_day, args.split)
     m = build_md(items, mid, end_day, args.split)
     print(f"看板：{h}")
-    print(f"日报：{m}\n")
+    print(f"日报：{m}")
+    if auto:
+        print(f"（今天 {today_str()} 还没有有效数据，自动改用最近有数据的 {end_day}）")
+    print()
     print(wpad("商品", 22) + wrpad("今日", 6) + wrpad("累计", 9)
           + wrpad("爆品值", 9) + wrpad("商品价值", 11) + "  象限  证据")
     for i in sorted(items, key=lambda x: -(x["value"] or 0)):
@@ -686,7 +727,7 @@ def main():
     f.add_argument("--start", default=today_str())
     b = sub.add_parser("backfill", help="灌历史模拟数据")
     b.add_argument("days", type=int)
-    b.add_argument("--start", default=(datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"))
+    b.add_argument("--start", default=(datetime.now() - timedelta(days=8)).strftime("%Y-%m-%d"))
     r = sub.add_parser("report", help="出看板")
     r.add_argument("--day"); r.add_argument("--split", default="p75")
     sub.add_parser("verify", help="自检")
