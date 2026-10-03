@@ -1,0 +1,13 @@
+# 数据目录：里面是你自己的监控数据（SQLite 库、监控清单、生成的看板），不要提交
+data/
+
+# 登录态：这是你的小红书 cookie，提交了等于把账号给人。
+# 不管放在哪一级目录，一律排除。
+storage_state.json
+**/storage_state.json
+
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
