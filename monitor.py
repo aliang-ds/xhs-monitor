@@ -149,8 +149,13 @@ def ensure_csv():
 
 
 def sync_products(c):
-    """把 products.csv 里的清单同步进库。CSV 是唯一的事实来源。"""
-    n = 0
+    """把 products.csv 里的清单同步进库。CSV 是唯一的事实来源：
+    新增的加进来、改过的覆盖掉、清单里删掉的也从监控池移除。
+
+    返回 (池子里的商品数, 这次被移除的个数)。
+    注意：移除只删商品本身，历史快照保留——同样的 id 加回来，数据还在。
+    """
+    ids = set()
     with open(products_csv(), encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
             if not row.get("id"):
@@ -158,18 +163,26 @@ def sync_products(c):
             c.execute("INSERT OR REPLACE INTO products VALUES (?,?,?,?,?,?,?)",
                       (row["id"], row["title"], row["url"], row["shop"],
                        float(row["price"] or 0), row.get("note", ""), now_ts()))
-            n += 1
+            ids.add(row["id"])
+    removed = 0
+    for (old_id,) in list(c.execute("SELECT id FROM products")):
+        if old_id not in ids:
+            c.execute("DELETE FROM products WHERE id=?", (old_id,))
+            removed += 1
     c.commit()
-    return n
+    return len(ids), removed
 
 
 def cmd_init(args):
     c = conn()
     created = ensure_csv()
-    n = sync_products(c)
+    n, removed = sync_products(c)
     print(f"数据目录：{DATA_DIR}")
     print(f"监控清单：{products_csv()}" + ("（刚生成示例 12 个，换成你自己的）" if created else ""))
     print(f"已入库：{n} 个商品")
+    if removed:
+        print(f"  另有 {removed} 个不在清单里的商品已从监控池移除"
+              f"（采过的历史仍留着，把同样编号加回来就能恢复）")
     print(f"数据库：{db_path()}")
 
 
@@ -197,8 +210,10 @@ def cmd_add(args):
     with open(products_csv(), "a", newline="", encoding="utf-8-sig") as f:
         csv.writer(f).writerow([pid, args.title or pid, args.url, args.shop or "",
                                 args.price or 0, args.note or ""])
-    n = sync_products(c)
+    n, removed = sync_products(c)
     print(f"已加入监控池：{args.title or pid}（id={pid}）　当前共 {n} 个")
+    if removed:
+        print(f"  另有 {removed} 个不在清单里的商品已从监控池移除")
     print("提醒：新加的商品没有历史基线，今天这一天会标成「不完整」，明天起才算得准。")
 
 
@@ -206,12 +221,14 @@ def cmd_list(args):
     c = conn()
     c.row_factory = sqlite3.Row
     ensure_csv()
-    sync_products(c)
+    _, removed = sync_products(c)
     rows = list(c.execute("SELECT * FROM products ORDER BY id"))
     if not rows:
-        print("监控池是空的。用 add 加商品，或先跑 init。")
+        print("监控池是空的。用 add 加商品，或在 products.csv 里填几个，再跑一次。")
         return
     print(f"监控池：{len(rows)} 个　（数据目录 {DATA_DIR}）\n")
+    if removed:
+        print(f"（刚从监控池移除 {removed} 个不在清单里的商品；采过的历史仍保留）\n")
     # ID 列宽自适应：示例 ID 只有 3 位，真实商品 ID 有 24 位，写死会把整行挤歪
     idw = max([10] + [_w(r["id"]) for r in rows]) + 2
     print(wpad("ID", idw) + wpad("商品", 24) + wrpad("客单价", 10) + "  " + wpad("店铺", 16) + "快照数")
